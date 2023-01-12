@@ -17,6 +17,14 @@ Resources:
     Type: 'AWS::S3::Bucket'
     Properties:
       BucketName: !Sub '${NamePrefix}-bucket'
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods:
+              - GET
+              - PUT
+              - POST
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
   TimeseriesLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -280,7 +288,7 @@ Resources:
       EntityName: WaterTank
       WorkspaceId: !Sub '${NamePrefix}-workspace'
       Components:
-        VelocityPrinterComponent:
+        PressureTankComponent:
           ComponentTypeId: telemetry.connector.pressure
           Description: telemetry.connector.pressure
           Properties:
