@@ -1,0 +1,353 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: 'AWS::Serverless-2016-10-31'
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: twinmaker-medium-post
+  MemoryStoreRetentionPeriodInHours:
+    Type: String
+    Default: "24"
+  MagneticStoreRetentionPeriodInDays:
+    Type: String
+    Default: "7"
+    
+Resources:
+  S3Twinmaker:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${NamePrefix}-bucket'
+  TimeseriesLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SeederTimeseriesRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AllowTimestreamListDabases
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'timestream:ListTables'
+                Resource: 'arn:aws:timestream:*:*:database/*'
+        - PolicyName: AllowTimestreamReadWrite
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'timestream:WriteRecords'
+                  - 'timestream:Select'
+                  - 'timestream:SelectValues'
+                Resource: 'arn:aws:timestream:*:*:database/*/table/*'
+        - PolicyName: AllowTimestreamListEndpoints
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'timestream:DescribeEndpoints'
+                  - 'timestream:ListDatabases'
+                Resource: '*'
+        - PolicyName: AllowCloudwatchActions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+  RoleGrafana:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${NamePrefix}-Grafana-Role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - grafana.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Sub '${AWS::AccountId}'
+  RoleTwinmaker:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${NamePrefix}-TwinMaker-Role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - iottwinmaker.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt RoleGrafana.Arn
+            Action:
+              - 'sts:AssumeRole'
+  RolePolicyTwinmaker:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub '${NamePrefix}-TwinMaker-Policy'
+      Roles:
+        - !Ref RoleTwinmaker
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:*'
+              - 'iottwinmaker:*'
+              - 'iotsitewise:*'
+              - 'kinesisvideo:*'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'timestream:CancelQuery'
+              - 'timestream:DescribeDatabase'
+              - 'timestream:DescribeEndpoints'
+              - 'timestream:DescribeTable'
+              - 'timestream:ListDatabases'
+              - 'timestream:ListMeasures'
+              - 'timestream:ListTables'
+              - 'timestream:ListTagsForResource'
+              - 'timestream:Select'
+              - 'timestream:SelectValues'
+              - 'timestream:DescribeScheduledQuery'
+              - 'timestream:ListScheduledQueries'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'lambda:invokeFunction'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'lambda:invokeFunction'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'iam:PassRole'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'iam:PassedToService': lambda.amazonaws.com
+  RolePolicyGrafana:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub '${NamePrefix}-Grafana-Policy'
+      Roles:
+        - !Ref RoleGrafana
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "iottwinmaker:GetPropertyValue"
+              - "iottwinmaker:ListEntities"
+              - "iottwinmaker:ListTagsForResource"
+              - "iottwinmaker:ListComponentTypes"
+              - "iottwinmaker:GetPropertyValueHistory"
+              - "iottwinmaker:GetScene"
+              - "iottwinmaker:ListScenes"
+              - "iottwinmaker:GetEntity"
+              - "iottwinmaker:GetWorkspace"
+              - "iottwinmaker:GetComponentType"
+            Resource: !Sub 'arn:aws:iottwinmaker:*:${AWS::AccountId}:workspace/*'
+          - Effect: Allow
+            Action:
+              - 'iottwinmaker:ListWorkspaces'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - "timestream:CancelQuery"
+              - "timestream:DescribeDatabase"
+              - "timestream:DescribeEndpoints"
+              - "timestream:DescribeTable"
+              - "timestream:ListDatabases"
+              - "timestream:ListMeasures"
+              - "timestream:ListTables"
+              - "timestream:ListTagsForResource"
+              - "timestream:Select"
+              - "timestream:SelectValues"
+              - "timestream:DescribeScheduledQuery"
+              - "timestream:ListScheduledQueries"
+            Resource: '*'
+  TwinMakerWorkspace:
+     Type: AWS::IoTTwinMaker::Workspace
+     DependsOn: [S3Twinmaker, RoleTwinmaker, RolePolicyTwinmaker]
+     Properties: 
+       Description: workspace medium post.
+       Role: !GetAtt RoleTwinmaker.Arn
+       S3Location: !GetAtt S3Twinmaker.Arn
+       WorkspaceId: !Sub '${NamePrefix}-workspace'
+  TemperatureComponentTwinMaker:
+    Type: AWS::IoTTwinMaker::ComponentType
+    DependsOn: 
+      - TwinMakerWorkspace
+    Properties:
+      ComponentTypeId: telemetry.connector.temperature
+      WorkspaceId: !Sub '${NamePrefix}-workspace'
+      Description: telemetry.connector.temperature
+      PropertyDefinitions:
+        temperature:
+          DataType:
+            Type: "DOUBLE"
+          IsExternalId: false
+          IsRequiredInEntity: false
+          IsStoredExternally: true
+          IsTimeSeries: true
+        sensorId:
+          DataType:
+            Type: "INTEGER"
+          IsExternalId: false
+          IsRequiredInEntity: true
+          IsStoredExternally: false
+          IsTimeSeries: false
+      Functions: 
+        dataReader:
+          ImplementedBy:
+            IsNative: false
+            Lambda:
+              Arn: !GetAtt TimestreamConnectorLambda.Arn
+  PressureComponentTwinMaker:
+    Type: AWS::IoTTwinMaker::ComponentType
+    DependsOn: 
+      - TwinMakerWorkspace
+    Properties:
+      ComponentTypeId: telemetry.connector.pressure
+      WorkspaceId: !Sub '${NamePrefix}-workspace'
+      Description: telemetry.connector.pressure
+      PropertyDefinitions:
+        pressure:
+          DataType:
+            Type: "DOUBLE"
+          IsExternalId: false
+          IsRequiredInEntity: false
+          IsStoredExternally: true
+          IsTimeSeries: true
+        sensorId:
+          DataType:
+            Type: "INTEGER"
+          IsExternalId: false
+          IsRequiredInEntity: true
+          IsStoredExternally: false
+          IsTimeSeries: false
+      Functions: 
+        dataReader:
+          ImplementedBy:
+            IsNative: false
+            Lambda:
+              Arn: !GetAtt TimestreamConnectorLambda.Arn
+  OfficeEntityTwinMaker:
+    Type: AWS::IoTTwinMaker::Entity
+    DependsOn: 
+      - TemperatureComponentTwinMaker
+    Properties:
+      Description: Office
+      EntityId: OfficeEntity
+      EntityName: Office
+      WorkspaceId: !Sub '${NamePrefix}-workspace'
+      Components:
+        TemperatureComponent:
+          ComponentTypeId: telemetry.connector.temperature
+          Description: telemetry.connector.temperature
+          Properties:
+            sensorId:
+              Value:
+                IntegerValue: 1
+  WaterTankEntityTwinMaker:
+    Type: AWS::IoTTwinMaker::Entity
+    DependsOn: 
+      - PressureComponentTwinMaker
+    Properties:
+      Description: Water tank
+      EntityId: WaterTank
+      EntityName: WaterTank
+      WorkspaceId: !Sub '${NamePrefix}-workspace'
+      Components:
+        VelocityPrinterComponent:
+          ComponentTypeId: telemetry.connector.pressure
+          Description: telemetry.connector.pressure
+          Properties:
+            sensorId:
+              Value:
+                IntegerValue: 2
+  GrafanaWorkSpace:
+    Type: AWS::Grafana::Workspace
+    DependsOn: 
+      - RoleGrafana
+    Properties:
+      Name: !Sub '${NamePrefix}-grafana'
+      AccountAccessType: CURRENT_ACCOUNT
+      AuthenticationProviders: 
+        - AWS_SSO
+      PermissionType: SERVICE_MANAGED
+      RoleArn: !GetAtt RoleGrafana.Arn
+  TimestreamDb:
+    Type: "AWS::Timestream::Database"
+    Properties:
+      DatabaseName: !Sub '${NamePrefix}-db'
+  TimestreamTable:
+    Type: AWS::Timestream::Table
+    DependsOn: TimestreamDb
+    Properties:
+        TableName: !Sub '${NamePrefix}-table'
+        DatabaseName: !Sub '${NamePrefix}-db'
+        RetentionProperties:
+            MemoryStoreRetentionPeriodInHours: !Sub '${MemoryStoreRetentionPeriodInHours}'
+            MagneticStoreRetentionPeriodInDays: !Sub '${MagneticStoreRetentionPeriodInDays}'
+  SeederTimeseriesLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: seeder-timeseries
+      Description: Lambda to insert data fake in timestream Db.
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+      CodeUri: ./lambdas/seeder-timeseries-data/
+      Handler: index.handler
+      Environment:
+        Variables:
+          DATABASE: !Sub '${NamePrefix}-db'
+          TABLE_NAME: !Sub '${NamePrefix}-table'
+      Events:
+        MyScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(10 minutes)
+      MemorySize: 128
+      Timeout: 30
+      Role: !GetAtt TimeseriesLambdaExecutionRole.Arn
+  TimestreamConnectorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: timestream-connector
+      Description: Lambda function to connect with timestream to return data to Twin Maker.
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+      CodeUri: ./lambdas/timestream-connector/
+      Handler: index.handler
+      Environment:
+        Variables:
+          DATABASE: !Sub '${NamePrefix}-db'
+          TABLE_NAME: !Sub '${NamePrefix}-table'
+      MemorySize: 128
+      Timeout: 30
+      Role: !GetAtt TimeseriesLambdaExecutionRole.Arn
+      
